@@ -1,0 +1,43 @@
+package cardbe:plugin@1.0.0;
+
+interface types {
+  record run-context {
+    instance-id: string,
+    run-id: string,
+    config-json: string,
+    board-json: string,
+    cursor: option<string>,
+  }
+  record external-task {
+    external-key: string,
+    title: string,
+    description: string,
+    url: string,
+    state: string,
+    labels: list<string>,
+    updated-at: string,
+    column-id: s64,
+  }
+  record changeset {
+    tasks: list<external-task>,
+    cursor: option<string>,
+  }
+  record plugin-error { code: string, retry-after-seconds: option<u32> }
+  record http-response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+}
+interface host {
+  use types.{http-response};
+  // GET only; credentials are attached by the host, never exposed to the guest.
+  http-get: func(url: string) -> result<http-response, string>;
+  // Bounded diagnostic codes, never arbitrary user content or credentials.
+  log: func(code: string, count: u32);
+}
+world importer {
+  use types.{run-context, changeset, plugin-error};
+  import host;
+  export run: func(context: run-context) -> result<changeset, plugin-error>;
+}
