@@ -1,14 +1,17 @@
 package cardbe:plugin@1.0.0;
 
 interface types {
+  /// Input for one invocation; JSON shapes are described in the README.
   record run-context {
     instance-id: string,
     run-id: string,
     config-json: string,
     board-json: string,
+    /// Opaque checkpoint from the last successfully committed run.
     cursor: option<string>,
   }
   record external-task {
+    /// Stable source identity; use a namespace to avoid collisions.
     external-key: string,
     title: string,
     description: string,
@@ -16,12 +19,16 @@ interface types {
     state: string,
     labels: list<string>,
     updated-at: string,
+    /// Destination column ID from board-json, not an external service ID.
     column-id: s64,
   }
   record changeset {
+    /// Upserts only; omitted tasks are not deleted.
     tasks: list<external-task>,
+    /// Replaces the stored checkpoint on commit; none clears it.
     cursor: option<string>,
   }
+  /// Code must be declared by the plugin; retry delay is a host-controlled hint.
   record plugin-error { code: string, retry-after-seconds: option<u32> }
   record http-response {
     status: u16,
@@ -31,11 +38,13 @@ interface types {
 }
 interface host {
   use types.{http-response};
-  // GET only; credentials are attached by the host, never exposed to the guest.
+  /// GET only; credentials are attached by the host, never exposed to the guest.
+  /// HTTP error statuses are responses; transport/policy failures are error codes.
   http-get: func(url: string) -> result<http-response, string>;
-  // Bounded diagnostic codes, never arbitrary user content or credentials.
+  /// Bounded diagnostic codes, never arbitrary user content or credentials.
   log: func(code: string, count: u32);
 }
+/// The guest imports host capabilities and exports run; no WASI is required.
 world importer {
   use types.{run-context, changeset, plugin-error};
   import host;
