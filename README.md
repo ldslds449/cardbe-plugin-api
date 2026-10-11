@@ -3,7 +3,7 @@
 This repository owns the single WIT contract consumed by Cardbe and independent
 plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.0.0`, world
 `plugin`. The API is not released yet; rebuild guests and Host bindings from
-one reviewed revision. Old draft components, including the JSON-query/changeset
+one reviewed revision. Old draft components, including the confirmation flag and JSON-query/changeset
 contract, are not compatible with this typed ABI; Manifest changes cannot fix it.
 There is no Plugin kind or Manifest world selection.
 
@@ -113,9 +113,9 @@ configuration JSON and opaque cursor. Each run has a fresh Wasmtime Store.
 There is no whole-board JSON input: use scoped, typed board functions and paginated `list-tasks`.
 
 Output can combine external-task upserts, a typed changeset and cursor.
-`require-confirmation` requests review; it cannot authorize automatic writes.
-Host device-local instance consent chooses automatic apply versus preview for
-all operations, with current board permissions and validation in both cases.
+After the user authorizes an instance to read and write its selected board,
+Host validates and commits output directly for manual and scheduled runs. There
+is no change preview or per-run confirmation. Current permissions are rechecked.
 An empty output supports HTTP/reporting-only work. Read-only output may still
 update its local checkpoint. Return the input cursor to preserve it; none clears
 it only on successful commit. Function signatures and data types are defined
@@ -149,9 +149,8 @@ Policy/transport failures return safe codes and fail the entire run even when
 guest catches them. Response headers are allowlisted and bodies bounded.
 The HTTP capability has no retry loop; later scheduled/manual runs can issue
 POST again. A timeout can leave its remote outcome unknown. External effects
-occur during execution, before board confirmation, and cannot be rolled back by
-local rejection/cancellation. Choose read-only endpoints when planning, or use
-remote idempotency for mutations.
+occur during execution, before local commit, and cannot be rolled back by
+local rejection/cancellation. Use remote idempotency for mutations.
 
 `host.log(code,count)` only accepts manifest-allowlisted bounded diagnostic
 codes, never arbitrary content or secrets. Plugin errors likewise use declared
@@ -170,7 +169,6 @@ No WASI filesystem/network/process/environment/clock capabilities are linked.
 | HTTP response body / total per run | 2 MiB / 32 MiB |
 | General operations / source upserts | 200 / 2,000 |
 | Combined changeset / resulting active columns | 8 MiB / 8 MiB |
-| Pending previews | 1 per instance, 8 per app |
 | Recorded logs | 100 |
 | External key / title / description | 512 / 4,096 / 262,144 bytes |
 | URL / state / updated-at | 4,096 / 64 / 128 bytes |
@@ -201,9 +199,8 @@ deep pages and searches retain the existing explorer costs.
 
 A changeset contains a snapshot version and typed operation variants. Column
 references are numeric IDs or temporary keys from an earlier create-column.
-Forward references are rejected. Host allocates IDs, preserving them between
-preview and commit. New tasks append; their keys are available in the native
-preview, and they can be positioned in a later changeset. Task updates replace
+Forward references are rejected. Host allocates IDs during validation. New tasks
+append; query them in a later run to obtain IDs for positioning. Task updates replace
 all fields while preserving identity: copy the queried task before editing.
 Explicit task moves require a destination with custom sorting. External upserts
 preserve user overrides, managed labels and tombstones; repeated upserts run in
@@ -221,14 +218,10 @@ Archives, settings and templates are preserved. Checklist limits are 1,000 entri
 with unique nonempty IDs (128 bytes) and text 4 KiB; labels must be unique and
 recurrence intervals are 1..10,000. Existing application date/text bounds apply.
 
-Review is optional. User consent allow_automatic_changes defaults to false;
-when enabled and the guest returns require-confirmation false, valid output is
-committed without displaying or storing a pending review. A guest may request
-confirmation on any run. Read-only/no-op output does not require review.
-Pending previews are volatile: one per instance, eight per app, invalidated by
-configuration/grant saves, disabling, package updates, removal or restart.
-Scheduled runs pause while awaiting confirmation; review does not re-run the
-guest. There is no action registry, durable job queue or automatic stale retry.
+Valid output commits directly after instance board authorization; manual and
+scheduled runs use the same validation and transaction path. Old pending-review
+records are cancelled on startup, never applied. There is no action registry,
+durable job queue or automatic stale retry.
 Board create/rename, cross-board mutation, deletion and archive/restore are not
 currently exposed.
 
@@ -248,9 +241,8 @@ An actively running instance blocks its removal and removal/update of its packag
 Update confirmation returns PLUGIN_UPDATE_BUSY; removal currently returns
 INVALID_ARGUMENT. Cancel first and wait for the active run to finish before
 retrying. A prepared update may be inspected before activation, but activation
-cannot replace a running component. Awaiting-confirmation output is no longer
-executing; removal/update invalidates its pending changeset. Disabling an instance
-cancels its active run. No expired Wasm execution is resumed.
+cannot replace a running component. Disabling an instance cancels its active run.
+No expired Wasm execution is resumed.
 
 ## Validation
 

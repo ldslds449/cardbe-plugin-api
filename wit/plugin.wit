@@ -83,8 +83,6 @@ interface types {
     tasks: list<external-task>,
     /// Optional general changeset, including mixed operations and source upserts.
     changeset: option<changeset>,
-    /// Requests review even when the instance has automatic-apply consent.
-    require-confirmation: bool,
     /// Replaces the stored checkpoint on commit; none clears it.
     cursor: option<string>,
   }
