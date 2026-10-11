@@ -1,12 +1,14 @@
 package cardbe:plugin@1.0.0;
 
 interface types {
-  /// Input for one invocation; JSON shapes are described in the README.
+  /// Input for one invocation; configuration remains plugin-owned JSON.
   record run-context {
     instance-id: string,
     run-id: string,
     config-json: string,
-    board-json: string,
+    board-id: s64,
+    board-version: string,
+    trigger: string,
     /// Opaque checkpoint from the last successfully committed run.
     cursor: option<string>,
   }
@@ -19,12 +21,70 @@ interface types {
     state: string,
     labels: list<string>,
     updated-at: string,
-    /// Destination column ID from board-json, not an external service ID.
+    /// Destination column ID from board queries, not an external service ID.
     column-id: s64,
   }
-  record changeset {
+  enum board-role { owner, editor, viewer }
+  enum sync-status { local, pending, synced, conflict }
+  enum column-sort { custom, due-date-asc, due-date-desc }
+  enum recurrence-frequency { daily, weekly, monthly }
+  record recurrence { frequency: recurrence-frequency, interval: u32 }
+  record task-item { id: string, text: string, completed: bool }
+  /// Dates are epoch milliseconds. The host preserves identity on updates.
+  record task {
+    id: s64, title: string, description: string, pinned: bool, color: string,
+    start-time: u64, due-time: option<u64>, labels: list<string>,
+    items: list<task-item>, recurrence: option<recurrence>,
+  }
+  record board-info {
+    id: s64, name: string, task-count: s64, shared-role: board-role,
+    is-shared: bool, sync-status: sync-status, sync-revision: s64,
+  }
+  record column-info {
+    id: s64, board-id: s64, name: string, color: string,
+    sort-order: column-sort, position: s64,
+  }
+  record task-info {
+    board-id: s64, column-id: option<s64>, position: option<s64>,
+    archived: bool, task: task,
+  }
+  record board-snapshot { version: string, board: board-info }
+  record board-list { version: string, boards: list<board-info> }
+  record column-snapshot { version: string, column: column-info }
+  record column-list { version: string, columns: list<column-info> }
+  record task-snapshot { version: string, task: task-info }
+  record task-page { version: string, tasks: list<task-info>, offset: u32, limit: u32 }
+  enum task-status { all, active, archived, overdue, recurring }
+  enum task-sort { title, due, column, archived }
+  enum due-filter { all, none, due }
+  record search-options { candidate-limit: u32, result-limit: u32, rrf-k: u32 }
+  record task-query {
+    query: string, column-id: option<s64>, status: task-status, sort: task-sort,
+    due: due-filter, due-start: option<s64>, due-end: option<s64>,
+    archive-start: option<s64>, archive-end: option<s64>,
+    search-options: option<search-options>, offset: u32, limit: u32,
+  }
+  variant column-reference { id(s64), temporary(string) }
+  record create-column { key: string, name: string, color: string }
+  record update-column { column: column-reference, name: string, color: string, sort-order: column-sort }
+  record move-column { column: column-reference, before: option<column-reference> }
+  record create-task { key: string, column: column-reference, task: task }
+  record update-task { task-id: s64, task: task }
+  record move-task { task-id: s64, column: column-reference, before-task-id: option<s64> }
+  record upsert-external-task { task: external-task, column: option<column-reference> }
+  variant operation {
+    create-column(create-column), update-column(update-column), move-column(move-column),
+    create-task(create-task), update-task(update-task), move-task(move-task),
+    upsert-external-task(upsert-external-task),
+  }
+  record changeset { version: string, operations: list<operation> }
+  record run-output {
     /// Upserts only; omitted tasks are not deleted.
     tasks: list<external-task>,
+    /// Optional general changeset, including mixed operations and source upserts.
+    changeset: option<changeset>,
+    /// Requests review even when the instance has automatic-apply consent.
+    require-confirmation: bool,
     /// Replaces the stored checkpoint on commit; none clears it.
     cursor: option<string>,
   }
@@ -38,15 +98,29 @@ interface types {
 }
 interface host {
   use types.{http-response};
-  /// GET only; credentials are attached by the host, never exposed to the guest.
+  /// Credentials are attached by the host, never exposed to the guest.
   /// HTTP error statuses are responses; transport/policy failures are error codes.
   http-get: func(url: string) -> result<http-response, string>;
+  /// Bounded POST; authorization is identical to GET. No retry within this call.
+  http-post: func(url: string, content-type: string, body: list<u8>) -> result<http-response, string>;
   /// Bounded diagnostic codes, never arbitrary user content or credentials.
   log: func(code: string, count: u32);
 }
-/// The guest imports host capabilities and exports run; no WASI is required.
-world importer {
-  use types.{run-context, changeset, plugin-error};
+interface board {
+  enum host-error { invalid-argument, permission-denied, not-found, resource-limit, internal-error }
+  use types.{board-list, board-snapshot, column-list, column-snapshot, task-snapshot, task-page, task-query};
+  /// Queries are scoped to the instance's authorized board and one run snapshot.
+  list-boards: func() -> result<board-list, host-error>;
+  get-board: func() -> result<board-snapshot, host-error>;
+  list-columns: func() -> result<column-list, host-error>;
+  get-column: func(id: s64) -> result<column-snapshot, host-error>;
+  get-task: func(id: s64, archived: bool) -> result<task-snapshot, host-error>;
+  list-tasks: func(request: task-query) -> result<task-page, host-error>;
+}
+/// All plugins share this contract. Host grants govern application of output.
+world plugin {
+  use types.{run-context, run-output, plugin-error};
   import host;
-  export run: func(context: run-context) -> result<changeset, plugin-error>;
+  import board;
+  export run: func(context: run-context) -> result<run-output, plugin-error>;
 }
