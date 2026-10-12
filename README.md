@@ -29,6 +29,7 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | `description` | Localized text / `null` | Optional display description. |
 | `domains` | String array / `[]` | At most 16 unique, nonempty lowercase ASCII hostnames. Each is at most 253 bytes; dot-separated labels are 1–63 bytes, use `a-z`, `0-9`, `-`, and cannot start or end with `-`. Supply hostnames only, without scheme, port, path, or wildcards. Runtime URL and public-address checks still apply. |
 | `allow_custom_domains` | Boolean / `false` | Allows the user to approve domains beyond the declared list; it does not grant automatic network access. |
+| `http_credentials` | Credential rule array / omitted | Optional host-managed Bearer rules for fixed domains or Base URL settings, scoped by API path. At most 64 rules. An explicit `[]` disables automatic authentication; omission or `null` retains legacy behavior. Requires a host implementing these rules; see below. |
 | `settings` | Setting field array / `[]` | At most 32 fields with unique keys; see below. |
 | `error_codes` | String array / `[]` | At most 64 declared guest error codes. Each is 1–64 ASCII characters from `A-Z`, `0-9`, `_`. |
 | `log_codes` | String array / `[]` | At most 64 declared diagnostic codes, using the same code format. |
@@ -53,9 +54,102 @@ An option requires a nonempty string `value` (at most 256 UTF-8 bytes) and a loc
 
 Defaults may be JSON scalars, not arrays or objects. Choose defaults that satisfy the field's type, options, and bounds: manifest parsing does not fully validate defaults against their field type, but saving an instance validates its values. Cardbe's settings form applies non-secret, non-null defaults; the backend does not automatically fill missing required configuration. Omit optional values instead of sending `null`. Unknown configuration keys are rejected.
 
-At most one `secret` field is supported, and it requires exactly one declared domain. Never provide a non-null secret default or embed credentials in metadata. Secret values are limited to 8,192 UTF-8 bytes and stored separately by the host. The current HTTP capability uses the secret as a Bearer token only for the declared domain when the instance has exactly one approved domain. Custom or additional approved domains do not receive that token. Plugins cannot read the secret or select arbitrary authentication headers.
+Never provide a non-null secret default or embed credentials in metadata. Secret values are limited to 8,192 UTF-8 bytes and stored separately by the host. Plugins cannot read secrets or supply arbitrary authentication headers. With explicit `http_credentials`, a package can declare multiple secret fields and assign them to different hosts and API paths. Without these rules (or with `null`), legacy validation allows at most one secret field and requires exactly one declared domain; its token is sent only when that original domain is the sole approved host. Legacy credentials never go to a custom host.
 
 Declared domains are requests for permission. The instance's approved domains determine actual access; an unapproved declared domain, or an eligible custom domain, can pause a run for user approval. HTTPS, public-address validation, DNS pinning, and the 16-domain limit still apply after approval.
+
+### HTTP credential rules
+
+Connection grants and credential rules are independent. Approving a host permits
+network access to that entire host; it does not give every request a token.
+`http_credentials` is host package metadata and does not change WIT API `1.0.0`
+or storage schema `1`. Packages using it require a host that implements these
+rules: older hosts can ignore unknown metadata, so do not distribute such packages
+to them.
+
+Each rule contains:
+
+| Field | Contract |
+| --- | --- |
+| `destination` | Either `{ "type": "domain", "domain": "api.example.com" }`, with the exact hostname listed in `domains`, or `{ "type": "base_url", "setting": "base_url" }`, referencing a `text` setting. |
+| `path_prefix` | Required path prefix, relative to the Base URL path or to the fixed host root. `/` covers the complete base path. |
+| `bearer_secret` | Optional key of a declared `secret` setting. Omission or `null` explicitly sends no token. |
+
+For a URL-setting destination, enter the Base URL once in instance configuration.
+Its host must be listed in `domains` unless `allow_custom_domains` is `true`.
+The URL must use HTTPS port 443, without user information, query, or fragment,
+and satisfy the existing public-host validation. Valid nonempty defaults for
+these settings are also checked during manifest parsing. An absent or empty
+optional URL setting leaves its rules inactive; required fields retain the normal
+configuration validation. The host still needs explicit connection approval.
+
+Prefixes use ASCII letters, digits, `/`, `-`, `.`, `_`, and `~`, with at most
+2048 bytes. They cannot contain wildcards, dot segments, duplicate slashes, or
+a trailing slash except `/`. Base URL paths use the same character restriction
+after trimming trailing slashes. With `https://custom.example.com/api`, a prefix
+of `/tasks` covers `/api/tasks` and its descendants, including `/api/tasks/123`.
+It does not cover `/api/tasks-other`. Matching is case-sensitive, query strings
+do not select credentials, and the longest matching prefix wins regardless of
+manifest order.
+
+For example, add this fragment to a complete manifest with the usual identity
+and version fields:
+
+```json
+{
+  "domains": ["fixed.example.com"],
+  "allow_custom_domains": true,
+  "settings": [
+    { "key": "base_url", "type": "text", "label": "API base URL", "required": true },
+    { "key": "api_token", "type": "secret", "label": "API token", "required": true },
+    { "key": "admin_token", "type": "secret", "label": "Admin token" }
+  ],
+  "http_credentials": [
+    {
+      "destination": { "type": "base_url", "setting": "base_url" },
+      "path_prefix": "/tasks",
+      "bearer_secret": "api_token"
+    },
+    {
+      "destination": { "type": "base_url", "setting": "base_url" },
+      "path_prefix": "/tasks/public"
+    },
+    {
+      "destination": { "type": "base_url", "setting": "base_url" },
+      "path_prefix": "/admin",
+      "bearer_secret": "admin_token"
+    },
+    {
+      "destination": { "type": "domain", "domain": "fixed.example.com" },
+      "path_prefix": "/tasks",
+      "bearer_secret": "api_token"
+    }
+  ]
+}
+```
+
+Use the existing locale objects for setting labels and descriptions in production
+packages. The guest receives `base_url` but never either token. The host attaches
+the assigned Bearer token to matching GET and POST requests. `/tasks/public`
+and its descendants explicitly have no token despite the broader `/tasks` rule.
+Unmatched requests also have no token. A missing optional secret never falls back
+to a broader rule, another secret, or legacy authentication. `http_credentials: []`
+disables automatic authentication even if secret settings exist.
+
+Duplicate destinations with the same prefix are rejected in the manifest.
+Different destinations resolving to the same host and prefix are rejected when
+saving configuration or preparing a run. On hosts with token rules, ambiguous
+request paths (encoded routing separators, double encoding, control characters,
+semicolons, or duplicate slashes) are rejected before DNS/HTTP. Public DNS checks,
+pinning, no redirects/proxies, and connection-grant limits still apply.
+
+The settings editor displays resolved credential hosts and paths separately from
+connection checkboxes. Network configuration changes preserve board consent.
+Changing an existing instance's Base URL host removes the new host's grant on save,
+even if it had previously been approved; a fresh run asks for approval again.
+Changing only the path on the same host retains the host grant. Configuration
+saves invalidate pending requests; pending records contain only host, run ID, and
+trigger, never the URL, query string, or credentials.
 
 ### Example manifest
 
@@ -103,7 +197,7 @@ The guest receives configuration such as `{"destination": 42, "include_closed": 
 
 Keep the three version fields independent: `version` identifies a plugin release, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts API `1.0.0` and schema `1`; an in-place update must retain plugin ID, API version, and storage schema version.
 
-Changes to domains, custom-domain permission, or setting declarations require instance review before execution resumes. Changing the credential domain or removing/renaming the secret field also requires credential review. Publishing a new plugin release does not update the WIT package or the host's database schema. Runtime, permissions, persistence, and validation remain host responsibilities.
+Changes to domains, custom-domain permission, setting declarations, or `http_credentials` require instance review before execution resumes. Changing declared credential domains or credential rules, or removing/renaming an existing secret field, also requires credentials to be re-entered. Re-entering one secret never reactivates other old secrets. Publishing a new plugin release does not update the WIT package or the host's database schema. Runtime, permissions, persistence, and validation remain host responsibilities.
 
 ## Contract
 
@@ -140,9 +234,11 @@ pinning, no redirects/proxies and bounded cancellation/timeouts remain enforced.
 `http-post(url, content-type, body)` accepts a nonempty valid header value of
 at most 256 bytes and a body of at most **10 MiB (10 * 1024 * 1024 bytes)**.
 POST bodies total at most 32 MiB per run, within the 100-request cap. Guest
-cannot supply arbitrary headers. Host attaches bearer credentials only for
-the original sole manifest domain when it is also the sole approved domain;
-custom/multiple destinations do not receive that credential.
+cannot supply arbitrary headers. With explicit `http_credentials`, Host attaches
+Bearer credentials only according to the matching host/path rule and the instance's
+connection grants. Legacy authentication remains restricted to the original sole
+manifest domain when it is also the sole approved domain; custom or multiple
+destinations never receive that legacy credential. See HTTP credential rules above.
 
 HTTP statuses, including non-2xx, are responses; guest must inspect them.
 Policy/transport failures return safe codes and fail the entire run even when
