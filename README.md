@@ -25,11 +25,12 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | `name` | Required localized text | Display name; use meaningful text in both supported languages. |
 | `version` | Required string | Plugin release version. Use stable `x.y.z`; in-place updates require three unsigned 64-bit integers without leading zeros and a strictly greater numeric version. Prerelease and build suffixes are not supported for updates. |
 | `api_version` | Required string | Currently exactly `1.0.0`, matching the WIT API consumed by the component. |
+| `manifest_version` | Unsigned 32-bit integer / `1` | Manifest format and semantics. This host supports `1` and `2`; other values and non-integers are rejected. Omission retains legacy v1 behavior. Authentication objects in `http_credentials[].auth` require `2`. Independent of release, WIT, and storage versions. |
 | `storage_schema_version` | Required unsigned 32-bit integer | Currently exactly `1`. Independent of plugin release and WIT versions; it is not permission to access or migrate the host database. |
 | `description` | Localized text / `null` | Optional display description. |
 | `domains` | String array / `[]` | At most 16 unique, nonempty lowercase ASCII hostnames. Each is at most 253 bytes; dot-separated labels are 1–63 bytes, use `a-z`, `0-9`, `-`, and cannot start or end with `-`. Supply hostnames only, without scheme, port, path, or wildcards. Runtime URL and public-address checks still apply. |
 | `allow_custom_domains` | Boolean / `false` | Allows the user to approve domains beyond the declared list; it does not grant automatic network access. |
-| `http_credentials` | Credential rule array / omitted | Optional host-managed Bearer rules for fixed domains or Base URL settings, scoped by API path. At most 64 rules. An explicit `[]` disables automatic authentication; omission or `null` retains legacy behavior. Requires a host implementing these rules; see below. |
+| `http_credentials` | Credential rule array / omitted | Optional host-managed Bearer or API-key header rules for fixed domains or Base URL settings, scoped by API path. At most 64 rules. An explicit `[]` disables automatic authentication; omission or `null` retains legacy behavior. Requires a host implementing these rules; see below. |
 | `settings` | Setting field array / `[]` | At most 32 fields with unique keys; see below. |
 | `error_codes` | String array / `[]` | At most 64 declared guest error codes. Each is 1–64 ASCII characters from `A-Z`, `0-9`, `_`. |
 | `log_codes` | String array / `[]` | At most 64 declared diagnostic codes, using the same code format. |
@@ -74,10 +75,52 @@ Each rule contains:
 | `destination` | Either `{ "type": "domain", "domain": "api.example.com" }`, with the exact hostname listed in `domains`, or `{ "type": "base_url", "setting": "base_url" }`, referencing a `text` setting. |
 | `path_prefix` | Required path prefix, relative to the Base URL path or to the fixed host root. `/` covers the complete base path. |
 | `bearer_secret` | Optional key of a declared `secret` setting. Omission or `null` explicitly sends no token. |
+| `auth` | Optional host-managed authentication: `{ "type": "bearer", "secret": "token" }` or `{ "type": "header", "name": "X-API-Key", "secret": "api_key" }`. Requires a host supporting API-key header rules. Do not combine with `bearer_secret`, even if either field is `null`. |
+
+Set the package's top-level `"manifest_version": 2` when using an `auth` object.
+Manifest v1 still supports existing `bearer_secret` rules; manifest v2 supports
+both legacy rules and the new format. Unknown versions are rejected on install,
+update, save, connection approval, and execution preparation. `auth: null` is
+equivalent to omission and can also be used in v1. Changing manifest version
+requires instance review; credential re-entry is required when credential rules
+or destinations change, not solely because the manifest version changes.
+This field cannot retroactively make published older hosts reject unknown
+metadata: distribute v2 packages only to hosts known to support v2.
+
+`bearer_secret` remains supported for existing packages. `auth: null`, or omission
+of both authentication fields, sends no credential for that rule. A header rule
+sends the secret value unchanged; a Bearer rule adds `Authorization: Bearer`.
+Secret values remain in the host's credential store and are never included in
+guest configuration. Enter the raw token or API key, without a `Bearer` prefix.
+Authentication rules apply to both GET and POST, using the same exact host/port
+grants, path boundaries, longest-prefix selection, and no-fallback behavior.
+
+Header names must be valid HTTP field names with at most 128 ASCII bytes.
+Host-managed and transport headers are reserved: `Authorization`, `Host`,
+`Cookie`, `Cookie2`, `Content-Length`, `Connection`, `Keep-Alive`,
+`Proxy-Authorization`, `Proxy-Authenticate`, `Proxy-Connection`, `TE`, `Trailer`,
+`Transfer-Encoding`, `Upgrade`, `Accept`, `Content-Type`, `User-Agent`, and
+names beginning with `Sec-` (case-insensitive). Secret values must be valid HTTP
+header values, with at most 8192 UTF-8 bytes; CR/LF and other forbidden controls
+are rejected on save and before DNS/HTTP. Header names are displayed separately
+from secret field labels in consent settings. Changing the authentication type,
+header name, referenced secret, or destination requires review and secret re-entry.
+General request-header customization, Basic Auth, cookies, and OAuth refresh are
+not part of this metadata. No WIT or storage-schema change is required.
+
+For an API using `X-API-Key`, declare an `api_key` secret setting and use:
+
+```json
+{
+  "destination": { "type": "base_url", "setting": "base_url" },
+  "path_prefix": "/tasks",
+  "auth": { "type": "header", "name": "X-API-Key", "secret": "api_key" }
+}
+```
 
 For a URL-setting destination, enter the Base URL once in instance configuration.
 Its host must be listed in `domains` unless `allow_custom_domains` is `true`.
-The URL must use HTTPS port 443, without user information, query, or fragment,
+The URL must use HTTPS with a nonzero port (443 by default), without user information, query, or fragment,
 and satisfy the existing public-host validation. Valid nonempty defaults for
 these settings are also checked during manifest parsing. An absent or empty
 optional URL setting leaves its rules inactive; required fields retain the normal
@@ -86,7 +129,8 @@ configuration validation. The host still needs explicit connection approval.
 Prefixes use ASCII letters, digits, `/`, `-`, `.`, `_`, and `~`, with at most
 2048 bytes. They cannot contain wildcards, dot segments, duplicate slashes, or
 a trailing slash except `/`. Base URL paths use the same character restriction
-after trimming trailing slashes. With `https://custom.example.com/api`, a prefix
+with an optional single trailing slash. Raw dot segments, encoded paths, and
+duplicate slashes are rejected before URL normalization. With `https://custom.example.com/api`, a prefix
 of `/tasks` covers `/api/tasks` and its descendants, including `/api/tasks/123`.
 It does not cover `/api/tasks-other`. Matching is case-sensitive, query strings
 do not select credentials, and the longest matching prefix wins regardless of
@@ -195,7 +239,7 @@ The guest receives configuration such as `{"destination": 42, "include_closed": 
 
 ### Versions and updates
 
-Keep the three version fields independent: `version` identifies a plugin release, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts API `1.0.0` and schema `1`; an in-place update must retain plugin ID, API version, and storage schema version.
+Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API `1.0.0` and storage schema `1`; an in-place update must retain plugin ID, API version, and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
 
 Changes to domains, custom-domain permission, setting declarations, or `http_credentials` require instance review before execution resumes. Changing declared credential domains or credential rules, or removing/renaming an existing secret field, also requires credentials to be re-entered. Re-entering one secret never reactivates other old secrets. Publishing a new plugin release does not update the WIT package or the host's database schema. Runtime, permissions, persistence, and validation remain host responsibilities.
 
@@ -223,7 +267,7 @@ app paths, host exceptions or host credentials.
 
 ## HTTP and diagnostics
 
-Both GET and POST use the same host capability. HTTPS port 443 only; grants are
+Both GET and POST use the same host capability. HTTPS with a nonzero port (443 by default); grants are
 at most 16 exact hostnames, never paths, wildcards or arbitrary subdomains.
 Only Manifest domains (or declared custom-domain capability) are eligible.
 An unapproved eligible hostname stops the run before DNS/HTTP and before board,
@@ -235,7 +279,7 @@ pinning, no redirects/proxies and bounded cancellation/timeouts remain enforced.
 at most 256 bytes and a body of at most **10 MiB (10 * 1024 * 1024 bytes)**.
 POST bodies total at most 32 MiB per run, within the 100-request cap. Guest
 cannot supply arbitrary headers. With explicit `http_credentials`, Host attaches
-Bearer credentials only according to the matching host/path rule and the instance's
+Bearer or API-key header credentials only according to the matching host/port/path rule and the instance's
 connection grants. Legacy authentication remains restricted to the original sole
 manifest domain when it is also the sole approved domain; custom or multiple
 destinations never receive that legacy credential. See HTTP credential rules above.
