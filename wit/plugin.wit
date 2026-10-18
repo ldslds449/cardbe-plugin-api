@@ -34,9 +34,13 @@ interface types {
   /// `start-time` is the user-chosen start; none means no start (changed in 1.1.0).
   /// `created-time` (added in 1.1.0) is host-stamped and read-only: the host
   /// ignores it on create/update; none means the creation time is unknown.
+  /// A start or due time at local midnight is a date without a time of day
+  /// unless `start-at-midnight` / `due-at-midnight` (added in 1.1.0) marks it
+  /// as a chosen 00:00; the flags are ignored for other times.
   record task {
     id: s64, title: string, description: string, pinned: bool, color: string,
     start-time: option<u64>, due-time: option<u64>, created-time: option<u64>,
+    start-at-midnight: bool, due-at-midnight: bool,
     labels: list<string>, items: list<task-item>, recurrence: option<recurrence>,
   }
   record board-info {

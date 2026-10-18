@@ -361,10 +361,15 @@ time for new tasks, including plugin-created tasks, and keeps it on updates;
 values supplied by the guest are ignored. Do not put the current time in
 `start-time` to mean "created now": it is shown to users as the task's start.
 Tasks saved before creation times were recorded report their creation time in
-`created-time` and no start time. A created task's `start-time` may not be
-later than its `due-time`, nor may an updated task's when either time changes;
-a due time at local midnight on this device is treated as a date-only due date
-covering that whole day. Unchanged times are accepted as read, because a
+`created-time` and no start time. A start or due time at local midnight on this
+device is a date without a time of day (a date-only start begins at that
+midnight, a date-only due date lasts until the end of that day) unless
+`start-at-midnight` or `due-at-midnight` marks it as a chosen 00:00. The flags
+are ignored for times that are not local midnight; set them only when the user
+means 00:00. A created task's `start-time` may not be later than its `due-time`,
+nor may an updated task's when either time changes; a due time at local midnight
+on this device is treated as a date-only due date covering that whole day,
+unless `due-at-midnight` is set. Unchanged times are accepted as read, because a
 date-only due date set in another time zone is not midnight here. Violations
 reject the whole changeset.
 
