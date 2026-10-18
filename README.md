@@ -1,7 +1,7 @@
 # Cardbe Plugin API
 
 This repository owns the single WIT contract consumed by Cardbe and independent
-plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.0.0`, world
+plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.1.0`, world
 `plugin`. The API is not released yet; rebuild guests and Host bindings from
 one reviewed revision. Old draft components, including the confirmation flag and JSON-query/changeset
 contract, are not compatible with this typed ABI; Manifest changes cannot fix it.
@@ -23,8 +23,8 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | --- | --- | --- |
 | `id` | Required string | Stable plugin identity, 1–100 ASCII characters from `a-z`, `0-9`, `-`, `_`. Windows device names `con`, `prn`, `aux`, `nul`, `com1`–`com9`, and `lpt1`–`lpt9` are reserved. |
 | `name` | Required localized text | Display name; use meaningful text in both supported languages. |
-| `version` | Required string | Plugin release version. Use stable `x.y.z`; in-place updates require three unsigned 64-bit integers without leading zeros and a strictly greater numeric version. Prerelease and build suffixes are not supported for updates. |
-| `api_version` | Required string | Currently exactly `1.0.0`, matching the WIT API consumed by the component. |
+| `version` | Required string | Plugin release version in stable `x.y.z` form: three unsigned 64-bit integers without leading zeros. Installation rejects other formats, including prerelease and build suffixes; in-place updates require a strictly greater numeric version. |
+| `api_version` | Required string | Currently exactly `1.1.0`, matching the WIT API consumed by the component. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
 | `manifest_version` | Unsigned 32-bit integer / `1` | Manifest format and semantics. This host supports `1` and `2`; other values and non-integers are rejected. Omission retains legacy v1 behavior. Authentication objects in `http_credentials[].auth` require `2`. Independent of release, WIT, and storage versions. |
 | `storage_schema_version` | Required unsigned 32-bit integer | Currently exactly `1`. Independent of plugin release and WIT versions; it is not permission to access or migrate the host database. |
 | `description` | Localized text / `null` | Optional display description. |
@@ -53,9 +53,9 @@ Each field requires `key`, `label` (localized text), and `type`. Optional `descr
 
 An option requires a nonempty string `value` (at most 256 UTF-8 bytes) and a localized `label`. Each field may declare at most 100 options, with unique values. Numeric bounds must be finite and `min <= max` when both exist.
 
-Defaults may be JSON scalars, not arrays or objects. Choose defaults that satisfy the field's type, options, and bounds: manifest parsing does not fully validate defaults against their field type, but saving an instance validates its values. Cardbe's settings form applies non-secret, non-null defaults; the backend does not automatically fill missing required configuration. Omit optional values instead of sending `null`. Unknown configuration keys are rejected.
+Defaults may be JSON scalars, not arrays or objects, and must match the field type: `text` strings up to 4,096 bytes, `number` values within the declared bounds, booleans, `select` values among the declared options, and integer `board`/`column` IDs. Manifest parsing rejects mismatched defaults; because board and column IDs are device-specific, saving an instance still validates them against the target board. Cardbe's settings form applies non-secret, non-null defaults; the backend does not automatically fill missing required configuration. Omit optional values instead of sending `null`. Unknown configuration keys are rejected.
 
-Never provide a non-null secret default or embed credentials in metadata. Secret values are limited to 8,192 UTF-8 bytes and stored separately by the host. Plugins cannot read secrets or supply arbitrary authentication headers. With explicit `http_credentials`, a package can declare multiple secret fields and assign them to different hosts and API paths. Without these rules (or with `null`), legacy validation allows at most one secret field and requires exactly one declared domain; its token is sent only when that original domain is the sole approved host. Legacy credentials never go to a custom host.
+Never provide a non-null secret default or embed credentials in metadata. Secret values are limited to 8,192 UTF-8 bytes without control characters other than tab, and stored separately by the host. A previously saved secret that cannot be sent as an HTTP header value fails the run with `INVALID_CREDENTIAL` before execution; re-enter it. Plugins cannot read secrets or supply arbitrary authentication headers. With explicit `http_credentials`, a package can declare multiple secret fields and assign them to different hosts and API paths. Without these rules (or with `null`), legacy validation allows at most one secret field and requires exactly one declared domain; its token is sent only when that original domain is the sole approved host. Legacy credentials never go to a custom host.
 
 Declared domains are requests for permission. The instance's approved domains determine actual access; an unapproved declared domain, or an eligible custom domain, can pause a run for user approval. HTTPS, public-address validation, DNS pinning, and the 16-domain limit still apply after approval.
 
@@ -63,7 +63,7 @@ Declared domains are requests for permission. The instance's approved domains de
 
 Connection grants and credential rules are independent. Approving a host permits
 network access to that entire host; it does not give every request a token.
-`http_credentials` is host package metadata and does not change WIT API `1.0.0`
+`http_credentials` is host package metadata and does not change the WIT API
 or storage schema `1`. Packages using it require a host that implements these
 rules: older hosts can ignore unknown metadata, so do not distribute such packages
 to them.
@@ -204,7 +204,7 @@ This example declares one credentialed origin and a destination column selected 
   "id": "example-importer",
   "name": { "en": "Example importer", "zh-TW": "範例匯入插件" },
   "version": "1.0.0",
-  "api_version": "1.0.0",
+  "api_version": "1.1.0",
   "storage_schema_version": 1,
   "description": { "en": "Import items into a board.", "zh-TW": "將項目匯入看板。" },
   "domains": ["api.example.com"],
@@ -239,7 +239,7 @@ The guest receives configuration such as `{"destination": 42, "include_closed": 
 
 ### Versions and updates
 
-Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API `1.0.0` and storage schema `1`; an in-place update must retain plugin ID, API version, and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
+Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API version `1.1.0`, and storage schema `1`; an in-place update must retain plugin ID and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
 
 Changes to domains, custom-domain permission, setting declarations, or `http_credentials` require instance review before execution resumes. Changing declared credential domains or credential rules, or removing/renaming an existing secret field, also requires credentials to be re-entered. Re-entering one secret never reactivates other old secrets. Publishing a new plugin release does not update the WIT package or the host's database schema. Runtime, permissions, persistence, and validation remain host responsibilities.
 
@@ -267,7 +267,7 @@ app paths, host exceptions or host credentials.
 
 ## HTTP and diagnostics
 
-Both GET and POST use the same host capability. HTTPS with a nonzero port (443 by default); grants are
+`http-get`, `http-post`, and `http-send` (API 1.1.0) use the same host capability. HTTPS with a nonzero port (443 by default); grants are
 at most 16 exact hostnames, never paths, wildcards or arbitrary subdomains.
 Only Manifest domains (or declared custom-domain capability) are eligible.
 An unapproved eligible hostname stops the run before DNS/HTTP and before board,
@@ -277,24 +277,50 @@ pinning, no redirects/proxies and bounded cancellation/timeouts remain enforced.
 
 `http-post(url, content-type, body)` accepts a nonempty valid header value of
 at most 256 bytes and a body of at most **10 MiB (10 * 1024 * 1024 bytes)**.
-POST bodies total at most 32 MiB per run, within the 100-request cap. Guest
-cannot supply arbitrary headers. With explicit `http_credentials`, Host attaches
+Request bodies total at most 32 MiB per run, within the 100-request cap shared
+by all HTTP functions.
+
+`http-send(request)` supports GET, POST, PUT, PATCH, and DELETE. Its `headers`
+are guest-supplied: at most 32 unique (case-insensitive) names, 32 KiB of names
+and values combined, valid HTTP names and control-free values of at most 8192
+bytes. `Accept` and `Content-Type` may be set; otherwise `Accept` defaults to
+`application/json`. The reserved credential-header names listed above, plus
+`Expect`, are rejected, as are header names used by this package's
+`http_credentials` header rules, so guests cannot replace host credentials. A
+`body` requires a nonempty `Content-Type` of at most 256 bytes and is rejected
+for GET. Invalid requests fail the run like other policy errors. With explicit `http_credentials`, Host attaches
 Bearer or API-key header credentials only according to the matching host/port/path rule and the instance's
 connection grants. Legacy authentication remains restricted to the original sole
 manifest domain when it is also the sole approved domain; custom or multiple
 destinations never receive that legacy credential. See HTTP credential rules above.
 
-HTTP statuses, including non-2xx, are responses; guest must inspect them.
+HTTP statuses, including non-2xx and `304 Not Modified`, are responses; guest
+must inspect them. Other 3xx statuses are redirects and fail the run.
 Policy/transport failures return safe codes and fail the entire run even when
-guest catches them. Response headers are allowlisted and bodies bounded.
+guest catches them, with one exception: a `NETWORK_FAILED` error from
+`http-send` (DNS, connection, TLS, or the 15-second per-request timeout) leaves
+the run usable, so the guest may skip the item or fall back. Run timeouts,
+cancellation, limits, and permission failures remain fatal. Response headers
+are allowlisted (`content-type`, `etag`, `last-modified`, `link`, `location`,
+`retry-after`, `x-ratelimit-remaining`, `x-ratelimit-reset`) and bodies are
+bounded; send `If-None-Match` or `If-Modified-Since` through `http-send` for
+conditional requests.
 The HTTP capability has no retry loop; later scheduled/manual runs can issue
 POST again. A timeout can leave its remote outcome unknown. External effects
 occur during execution, before local commit, and cannot be rolled back by
 local rejection/cancellation. Use remote idempotency for mutations.
 
 `host.log(code,count)` only accepts manifest-allowlisted bounded diagnostic
-codes, never arbitrary content or secrets. Plugin errors likewise use declared
-codes and a bounded retry hint. Host failures stay in their safe error namespace.
+codes, never arbitrary content or secrets. API 1.1.0 adds
+`host.log-message(level,message)` for free-text diagnostics at `debug`, `info`,
+`warn` or `error`. Messages are kept in order with coded logs in the local run
+history. The host redacts the instance's loaded credential values as `***`,
+replaces control characters other than newline and tab, and truncates each
+message at a UTF-8 boundary. They never leave the device, but they are not
+encrypted; do not log user content, personal data or response bodies the user
+would not expect to keep.
+Plugin errors use declared codes and a bounded retry hint, like coded logs.
+Host failures stay in their safe error namespace.
 No WASI filesystem/network/process/environment/clock capabilities are linked.
 
 ## Host limits
@@ -309,7 +335,8 @@ No WASI filesystem/network/process/environment/clock capabilities are linked.
 | HTTP response body / total per run | 2 MiB / 32 MiB |
 | General operations / source upserts | 200 / 2,000 |
 | Combined changeset / resulting active columns | 8 MiB / 8 MiB |
-| Recorded logs | 100 |
+| Recorded coded logs / text messages | 100 / 200 per run |
+| Text message / total text per run | 1,024 / 65,536 bytes |
 | External key / title / description | 512 / 4,096 / 262,144 bytes |
 | URL / state / updated-at | 4,096 / 64 / 128 bytes |
 | Labels / each label | 100 / 256 bytes |
@@ -327,6 +354,19 @@ host-error enum. No SQLite handle, path, caller-provided board scope or clock
 is exposed. Archived tasks have no column or position because archives do not
 retain original columns. Dates are u64 epoch milliseconds; unsupported larger
 stored values are rejected without truncation.
+
+A task has three independent times: optional `start-time` (user-chosen start),
+optional `due-time`, and read-only `created-time`. The host stamps the creation
+time for new tasks, including plugin-created tasks, and keeps it on updates;
+values supplied by the guest are ignored. Do not put the current time in
+`start-time` to mean "created now": it is shown to users as the task's start.
+Tasks saved before creation times were recorded report their creation time in
+`created-time` and no start time. A created task's `start-time` may not be
+later than its `due-time`, nor may an updated task's when either time changes;
+a due time at local midnight on this device is treated as a date-only due date
+covering that whole day. Unchanged times are accepted as read, because a
+date-only due date set in another time zone is not midnight here. Violations
+reject the whole changeset.
 
 list-tasks uses the existing explorer filtering/search and OFFSET pagination.
 Choose status all to include active and archived tasks; limit is 1..100.
@@ -367,12 +407,15 @@ currently exposed.
 
 ## Local execution history and lifecycle
 
-Accepted guest logs are buffered in memory as code/count and stored with a
-normally returned guest's run record as level info. Records are device-local
-JSON payloads in SQLite cardbe_plugin_data (kind run, id run-id). Each instance
-retains its latest 50 runs, with at most 100 declared diagnostics per run.
-Guest errors, traps, host request failures and cancellation do not currently
-preserve the buffered guest logs; they still record safe execution status/errors.
+Accepted guest logs are buffered in memory (codes at level info, text messages
+at their own level) and stored with the run record, whether the run succeeds,
+fails or is cancelled. Records are device-local JSON payloads in SQLite cardbe_plugin_data (kind run,
+id run-id). Each instance retains its latest 50 runs, with at most 100 declared
+diagnostic codes and 200 text messages per run.
+Guest errors, traps, host request failures, timeouts and cancellation keep the
+logs recorded before the failure next to the safe execution status/error, so a
+plugin can log progress codes to diagnose where a run stopped. Hosts without API
+1.1.0 support discard these logs on failure.
 This is execution history, not a streaming text log or synchronized board data.
 Removing an instance also removes its run history and source/cursor bookkeeping,
 while leaving created board tasks intact.

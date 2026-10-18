@@ -1,4 +1,4 @@
-package cardbe:plugin@1.0.0;
+package cardbe:plugin@1.1.0;
 
 interface types {
   /// Input for one invocation; configuration remains plugin-owned JSON.
@@ -31,10 +31,13 @@ interface types {
   record recurrence { frequency: recurrence-frequency, interval: u32 }
   record task-item { id: string, text: string, completed: bool }
   /// Dates are epoch milliseconds. The host preserves identity on updates.
+  /// `start-time` is the user-chosen start; none means no start (changed in 1.1.0).
+  /// `created-time` (added in 1.1.0) is host-stamped and read-only: the host
+  /// ignores it on create/update; none means the creation time is unknown.
   record task {
     id: s64, title: string, description: string, pinned: bool, color: string,
-    start-time: u64, due-time: option<u64>, labels: list<string>,
-    items: list<task-item>, recurrence: option<recurrence>,
+    start-time: option<u64>, due-time: option<u64>, created-time: option<u64>,
+    labels: list<string>, items: list<task-item>, recurrence: option<recurrence>,
   }
   record board-info {
     id: s64, name: string, task-count: s64, shared-role: board-role,
@@ -93,16 +96,38 @@ interface types {
     headers: list<tuple<string, string>>,
     body: list<u8>,
   }
+  /// Added in 1.1.0.
+  enum http-method { get, post, put, patch, delete }
+  /// Added in 1.1.0. Severity of a `log-message` entry.
+  enum log-level { debug, info, warn, error }
+  /// Added in 1.1.0; sent with `http-send`. Headers are guest-supplied;
+  /// host-managed, transport and credential header names are rejected. A body
+  /// requires a content-type header and is not allowed for GET.
+  record http-request {
+    method: http-method,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: option<list<u8>>,
+  }
 }
 interface host {
-  use types.{http-response};
+  use types.{http-request, http-response, log-level};
   /// Credentials are attached by the host, never exposed to the guest.
   /// HTTP error statuses are responses; transport/policy failures are error codes.
   http-get: func(url: string) -> result<http-response, string>;
   /// Bounded POST; authorization is identical to GET. No retry within this call.
   http-post: func(url: string, content-type: string, body: list<u8>) -> result<http-response, string>;
+  /// Added in 1.1.0. Same grants, credentials and limits as GET/POST. Unlike them,
+  /// a `NETWORK_FAILED` error leaves the run usable so the guest may continue;
+  /// policy and limit errors still fail the run. No retry within this call.
+  http-send: func(request: http-request) -> result<http-response, string>;
   /// Bounded diagnostic codes, never arbitrary user content or credentials.
   log: func(code: string, count: u32);
+  /// Added in 1.1.0. Free-text diagnostics stored in this device's local run history,
+  /// including failed runs. The host redacts loaded credential values, replaces
+  /// control characters other than newline/tab and truncates oversized text.
+  /// Avoid logging user content or personal data the user would not expect to keep.
+  log-message: func(level: log-level, message: string);
 }
 interface board {
   enum host-error { invalid-argument, permission-denied, not-found, resource-limit, internal-error }
