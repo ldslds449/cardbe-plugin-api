@@ -1,4 +1,4 @@
-package cardbe:plugin@1.1.0;
+package cardbe:plugin@1.2.0;
 
 interface types {
   /// Input for one invocation; configuration remains plugin-owned JSON.
@@ -113,6 +113,12 @@ interface types {
     headers: list<tuple<string, string>>,
     body: option<list<u8>>,
   }
+  /// Added in 1.2.0. Ordered from least to most important; a task without a
+  /// priority has none.
+  enum task-priority { low, medium, high, urgent }
+  /// Added in 1.2.0. An existing task ID, or the key of a create-task in the
+  /// changeset this run returns.
+  variant task-reference { id(s64), temporary(string) }
 }
 interface host {
   use types.{http-request, http-response, log-level};
@@ -135,7 +141,7 @@ interface host {
 }
 interface board {
   enum host-error { invalid-argument, permission-denied, not-found, resource-limit, internal-error }
-  use types.{board-list, board-snapshot, column-list, column-snapshot, task-snapshot, task-page, task-query};
+  use types.{board-list, board-snapshot, column-list, column-snapshot, task-snapshot, task-page, task-query, task-priority, task-reference};
   /// Queries are scoped to the instance's authorized board and one run snapshot.
   list-boards: func() -> result<board-list, host-error>;
   get-board: func() -> result<board-snapshot, host-error>;
@@ -143,6 +149,21 @@ interface board {
   get-column: func(id: s64) -> result<column-snapshot, host-error>;
   get-task: func(id: s64, archived: bool) -> result<task-snapshot, host-error>;
   list-tasks: func(request: task-query) -> result<task-page, host-error>;
+  /// Added in 1.2.0. The task's priority in the run snapshot; `task` records
+  /// do not carry it.
+  get-task-priority: func(id: s64, archived: bool) -> result<option<task-priority>, host-error>;
+  /// Added in 1.2.0. Stages a priority (none clears it) that is applied, in
+  /// call order, after this run's returned changeset and committed atomically
+  /// with it; nothing is applied if the run fails. Task updates keep the
+  /// stored priority. At most 200 calls per run. Writes directly, without
+  /// tracking whether the user changed the priority.
+  set-task-priority: func(task: task-reference, priority: option<task-priority>) -> result<_, host-error>;
+  /// Added in 1.2.0. Reports the source priority (none clears it) of an
+  /// external task this run upserts, applied after all upserts with the same
+  /// ownership as titles: once the user changes the priority, the source no
+  /// longer replaces it. Unreported tasks keep their priority. The last call
+  /// per key wins; at most 2000 keys per run.
+  set-external-task-priority: func(external-key: string, priority: option<task-priority>) -> result<_, host-error>;
 }
 /// All plugins share this contract. Host grants govern application of output.
 world plugin {

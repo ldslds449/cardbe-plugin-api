@@ -1,7 +1,7 @@
 # Cardbe Plugin API
 
 This repository owns the single WIT contract consumed by Cardbe and independent
-plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.1.0`, world
+plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.2.0`, world
 `plugin`. The API is not released yet; rebuild guests and Host bindings from
 one reviewed revision. Old draft components, including the confirmation flag and JSON-query/changeset
 contract, are not compatible with this typed ABI; Manifest changes cannot fix it.
@@ -24,7 +24,7 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | `id` | Required string | Stable plugin identity, 1–100 ASCII characters from `a-z`, `0-9`, `-`, `_`. Windows device names `con`, `prn`, `aux`, `nul`, `com1`–`com9`, and `lpt1`–`lpt9` are reserved. |
 | `name` | Required localized text | Display name; use meaningful text in both supported languages. |
 | `version` | Required string | Plugin release version in stable `x.y.z` form: three unsigned 64-bit integers without leading zeros. Installation rejects other formats, including prerelease and build suffixes; in-place updates require a strictly greater numeric version. |
-| `api_version` | Required string | Currently exactly `1.1.0`, matching the WIT API consumed by the component. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
+| `api_version` | Required string | `1.1.0` or `1.2.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority functions, so `1.1.0` components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
 | `manifest_version` | Unsigned 32-bit integer / `1` | Manifest format and semantics. This host supports `1` and `2`; other values and non-integers are rejected. Omission retains legacy v1 behavior. Authentication objects in `http_credentials[].auth` require `2`. Independent of release, WIT, and storage versions. |
 | `storage_schema_version` | Required unsigned 32-bit integer | Currently exactly `1`. Independent of plugin release and WIT versions; it is not permission to access or migrate the host database. |
 | `description` | Localized text / `null` | Optional display description. |
@@ -204,7 +204,7 @@ This example declares one credentialed origin and a destination column selected 
   "id": "example-importer",
   "name": { "en": "Example importer", "zh-TW": "範例匯入插件" },
   "version": "1.0.0",
-  "api_version": "1.1.0",
+  "api_version": "1.2.0",
   "storage_schema_version": 1,
   "description": { "en": "Import items into a board.", "zh-TW": "將項目匯入看板。" },
   "domains": ["api.example.com"],
@@ -239,7 +239,7 @@ The guest receives configuration such as `{"destination": 42, "include_closed": 
 
 ### Versions and updates
 
-Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API version `1.1.0`, and storage schema `1`; an in-place update must retain plugin ID and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
+Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API versions `1.1.0` and `1.2.0`, and storage schema `1`; an in-place update must retain plugin ID and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
 
 Changes to domains, custom-domain permission, setting declarations, or `http_credentials` require instance review before execution resumes. Changing declared credential domains or credential rules, or removing/renaming an existing secret field, also requires credentials to be re-entered. Re-entering one secret never reactivates other old secrets. Publishing a new plugin release does not update the WIT package or the host's database schema. Runtime, permissions, persistence, and validation remain host responsibilities.
 
@@ -372,6 +372,26 @@ on this device is treated as a date-only due date covering that whole day,
 unless `due-at-midnight` is set. Unchanged times are accepted as read, because a
 date-only due date set in another time zone is not midnight here. Violations
 reject the whole changeset.
+
+Task priority (API 1.2.0) is not part of the `task` record, so components built
+for 1.1.0 keep working. Read it with `get-task-priority`, which counts toward
+the same query budget. Stage changes with `set-task-priority`, referencing an
+existing task ID or the key of a create-task in the returned changeset; none
+clears the priority. Staged priorities apply in call order after the returned
+operations (or after an empty changeset at the run snapshot) and commit in the
+same transaction, so a failed or stale run applies none of them. Task updates
+always keep the stored priority. A run may stage at most 200 priorities, and
+they count toward the changeset's 200 general operations; keys are 1..128 bytes.
+`set-task-priority` writes directly and does not track user changes.
+
+To synchronize a source's priority, call `set-external-task-priority` with the
+external key of a task returned in `tasks` or upserted in the changeset.
+Reported priorities apply after all upserts and follow the same ownership as
+titles: the source replaces the priority until the user changes it, and never
+afterwards, even if the values match again. Tasks without a report keep their
+priority, so 1.1.0 components never change it; none clears it. The last call
+for a key wins, a run may report at most 2000 keys (1..512 bytes), and a key
+that this run does not upsert rejects the whole changeset.
 
 list-tasks uses the existing explorer filtering/search and OFFSET pagination.
 Choose status all to include active and archived tasks; limit is 1..100.
