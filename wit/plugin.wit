@@ -152,6 +152,13 @@ interface board {
   /// Added in 1.2.0. The task's priority in the run snapshot; `task` records
   /// do not carry it.
   get-task-priority: func(id: s64, archived: bool) -> result<option<task-priority>, host-error>;
+  /// Added in 1.2.0. The board's done column, if any. Tasks in it are
+  /// completed; move a task there to complete it.
+  get-done-column: func() -> result<option<s64>, host-error>;
+  /// Added in 1.2.0. Milliseconds since the Unix epoch when the task entered
+  /// the done column, or the archive time of a task completed by archiving.
+  /// None for open tasks and when the time is unknown.
+  get-task-completed-time: func(id: s64, archived: bool) -> result<option<u64>, host-error>;
   /// Added in 1.2.0. Stages a priority (none clears it) that is applied, in
   /// call order, after this run's returned changeset and committed atomically
   /// with it; nothing is applied if the run fails. Task updates keep the

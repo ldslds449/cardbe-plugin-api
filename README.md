@@ -24,7 +24,7 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | `id` | Required string | Stable plugin identity, 1–100 ASCII characters from `a-z`, `0-9`, `-`, `_`. Windows device names `con`, `prn`, `aux`, `nul`, `com1`–`com9`, and `lpt1`–`lpt9` are reserved. |
 | `name` | Required localized text | Display name; use meaningful text in both supported languages. |
 | `version` | Required string | Plugin release version in stable `x.y.z` form: three unsigned 64-bit integers without leading zeros. Installation rejects other formats, including prerelease and build suffixes; in-place updates require a strictly greater numeric version. |
-| `api_version` | Required string | `1.1.0` or `1.2.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority functions, so `1.1.0` components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
+| `api_version` | Required string | `1.1.0` or `1.2.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority and completion functions, so `1.1.0` components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
 | `manifest_version` | Unsigned 32-bit integer / `1` | Manifest format and semantics. This host supports `1` and `2`; other values and non-integers are rejected. Omission retains legacy v1 behavior. Authentication objects in `http_credentials[].auth` require `2`. Independent of release, WIT, and storage versions. |
 | `storage_schema_version` | Required unsigned 32-bit integer | Currently exactly `1`. Independent of plugin release and WIT versions; it is not permission to access or migrate the host database. |
 | `description` | Localized text / `null` | Optional display description. |
@@ -392,6 +392,15 @@ afterwards, even if the values match again. Tasks without a report keep their
 priority, so 1.1.0 components never change it; none clears it. The last call
 for a key wins, a run may report at most 2000 keys (1..512 bytes), and a key
 that this run does not upsert rejects the whole changeset.
+
+Completion (API 1.2.0) follows a task's position: a task is completed while it
+is in the board's done column, or once it is archived. `get-done-column`
+returns that column, if any; to complete a task, move it there with
+`move-task`, and the host records when. `get-task-completed-time` returns
+milliseconds since the Unix epoch when the task entered the done column, or the
+archive time of a task completed by archiving; open tasks and tasks with an
+unknown time return none. Both count toward the query budget. Task updates keep
+the stored completion time.
 
 list-tasks uses the existing explorer filtering/search and OFFSET pagination.
 Choose status all to include active and archived tasks; limit is 1..100.
