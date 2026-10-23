@@ -141,7 +141,7 @@ interface host {
 }
 interface board {
   enum host-error { invalid-argument, permission-denied, not-found, resource-limit, internal-error }
-  use types.{board-list, board-snapshot, column-list, column-snapshot, task-snapshot, task-page, task-query, task-priority, task-reference};
+  use types.{board-list, board-snapshot, column-list, column-reference, column-snapshot, task-snapshot, task-page, task-query, task-priority, task-reference};
   /// Queries are scoped to the instance's authorized board and one run snapshot.
   list-boards: func() -> result<board-list, host-error>;
   get-board: func() -> result<board-snapshot, host-error>;
@@ -171,6 +171,15 @@ interface board {
   /// longer replaces it. Unreported tasks keep their priority. The last call
   /// per key wins; at most 2000 keys per run.
   set-external-task-priority: func(external-key: string, priority: option<task-priority>) -> result<_, host-error>;
+  /// Added in 1.2.0. Stages archiving an active task, applied in call order
+  /// with `set-task-priority` and `restore-task` and committed atomically with
+  /// the changeset. Recurring tasks continue with their next occurrence, as in
+  /// the app. At most 200 staged task calls per run.
+  archive-task: func(task: task-reference) -> result<_, host-error>;
+  /// Added in 1.2.0. Stages restoring an archived task (an ID from an
+  /// archived query) to the end of a column, which may be a create-column key
+  /// in the returned changeset. Applied like `archive-task`.
+  restore-task: func(id: s64, column: column-reference) -> result<_, host-error>;
 }
 /// All plugins share this contract. Host grants govern application of output.
 world plugin {

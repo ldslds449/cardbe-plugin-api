@@ -24,7 +24,7 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | `id` | Required string | Stable plugin identity, 1–100 ASCII characters from `a-z`, `0-9`, `-`, `_`. Windows device names `con`, `prn`, `aux`, `nul`, `com1`–`com9`, and `lpt1`–`lpt9` are reserved. |
 | `name` | Required localized text | Display name; use meaningful text in both supported languages. |
 | `version` | Required string | Plugin release version in stable `x.y.z` form: three unsigned 64-bit integers without leading zeros. Installation rejects other formats, including prerelease and build suffixes; in-place updates require a strictly greater numeric version. |
-| `api_version` | Required string | `1.1.0` or `1.2.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority and completion functions, so `1.1.0` components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
+| `api_version` | Required string | `1.1.0` or `1.2.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority, completion, and archive/restore functions, so `1.1.0` components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
 | `manifest_version` | Unsigned 32-bit integer / `1` | Manifest format and semantics. This host supports `1` and `2`; other values and non-integers are rejected. Omission retains legacy v1 behavior. Authentication objects in `http_credentials[].auth` require `2`. Independent of release, WIT, and storage versions. |
 | `storage_schema_version` | Required unsigned 32-bit integer | Currently exactly `1`. Independent of plugin release and WIT versions; it is not permission to access or migrate the host database. |
 | `description` | Localized text / `null` | Optional display description. |
@@ -393,6 +393,28 @@ priority, so 1.1.0 components never change it; none clears it. The last call
 for a key wins, a run may report at most 2000 keys (1..512 bytes), and a key
 that this run does not upsert rejects the whole changeset.
 
+Archive and restore (API 1.2.0) are staged the same way. `archive-task` takes an
+active task ID or the key of a create-task in the returned changeset;
+`restore-task` takes an archived task ID (from `get-task` or `list-tasks` with
+archived tasks) and a destination column ID or create-column key, and appends
+the task to that column. Archive, restore and `set-task-priority` calls share
+one queue: they apply in call order after the returned operations, before
+reported source priorities, and commit in the same transaction, so a failed or
+stale run applies none of them. Together they count toward the 200 general
+operations. A target that is missing, or not active (archive) or not archived
+(restore) when its call applies, rejects the whole changeset, so a task can be
+archived and restored in one run only in that order of calls. Archiving keeps
+the task's fields and priority; restoring returns them unchanged. As
+completion follows position, archiving completes a task and restoring it to a
+column other than the done column reopens it. A recurring
+task continues with its next occurrence in its column, as when archived in the
+app; query a later run to obtain the new task's ID.
+
+An archived source task is a tombstone: later upserts of its external key do
+not update or recreate it, and source priorities reported for it are not
+applied. After it is restored, upserts update it again with the usual
+ownership. There is no delete; archive instead.
+
 Completion (API 1.2.0) follows a task's position: a task is completed while it
 is in the board's done column, or once it is archived. `get-done-column`
 returns that column, if any; to complete a task, move it there with
@@ -436,8 +458,8 @@ Valid output commits directly after instance board authorization; manual and
 scheduled runs use the same validation and transaction path. Old pending-review
 records are cancelled on startup, never applied. There is no action registry,
 durable job queue or automatic stale retry.
-Board create/rename, cross-board mutation, deletion and archive/restore are not
-currently exposed.
+Board create/rename, cross-board mutation and deletion are not currently
+exposed.
 
 ## Local execution history and lifecycle
 
