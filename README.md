@@ -1,7 +1,7 @@
 # Cardbe Plugin API
 
 This repository owns the single WIT contract consumed by Cardbe and independent
-plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.2.0`, world
+plugins: [wit/plugin.wit](wit/plugin.wit), package `cardbe:plugin@1.3.0`, world
 `plugin`. The API is not released yet; rebuild guests and Host bindings from
 one reviewed revision. Old draft components, including the confirmation flag and JSON-query/changeset
 contract, are not compatible with this typed ABI; Manifest changes cannot fix it.
@@ -24,7 +24,7 @@ A local package directory contains `manifest.json` and `component.wasm` together
 | `id` | Required string | Stable plugin identity, 1–100 ASCII characters from `a-z`, `0-9`, `-`, `_`. Windows device names `con`, `prn`, `aux`, `nul`, `com1`–`com9`, and `lpt1`–`lpt9` are reserved. |
 | `name` | Required localized text | Display name; use meaningful text in both supported languages. |
 | `version` | Required string | Plugin release version in stable `x.y.z` form: three unsigned 64-bit integers without leading zeros. Installation rejects other formats, including prerelease and build suffixes; in-place updates require a strictly greater numeric version. |
-| `api_version` | Required string | `1.1.0` or `1.2.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority, completion, and archive/restore functions, so `1.1.0` components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
+| `api_version` | Required string | `1.1.0`, `1.2.0` or `1.3.0`, matching the WIT API consumed by the component. `1.2.0` only adds task priority, completion, and archive/restore functions and `1.3.0` only adds filtered queries and waiting tasks, so older 1.x components keep working. Components built for the unreleased `1.0.0` draft are not compatible: `1.1.0` changed the `task` record (see Board operations). |
 | `manifest_version` | Unsigned 32-bit integer / `1` | Manifest format and semantics. This host supports `1` and `2`; other values and non-integers are rejected. Omission retains legacy v1 behavior. Authentication objects in `http_credentials[].auth` require `2`. Independent of release, WIT, and storage versions. |
 | `storage_schema_version` | Required unsigned 32-bit integer | Currently exactly `1`. Independent of plugin release and WIT versions; it is not permission to access or migrate the host database. |
 | `description` | Localized text / `null` | Optional display description. |
@@ -204,7 +204,7 @@ This example declares one credentialed origin and a destination column selected 
   "id": "example-importer",
   "name": { "en": "Example importer", "zh-TW": "範例匯入插件" },
   "version": "1.0.0",
-  "api_version": "1.2.0",
+  "api_version": "1.3.0",
   "storage_schema_version": 1,
   "description": { "en": "Import items into a board.", "zh-TW": "將項目匯入看板。" },
   "domains": ["api.example.com"],
@@ -239,7 +239,7 @@ The guest receives configuration such as `{"destination": 42, "include_closed": 
 
 ### Versions and updates
 
-Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API versions `1.1.0` and `1.2.0`, and storage schema `1`; an in-place update must retain plugin ID and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
+Keep the four version fields independent: `version` identifies a plugin release, `manifest_version` selects package format and semantics, `api_version` selects the public execution API, and `storage_schema_version` declares the package's supported storage schema. The current host accepts manifest versions `1` and `2`, API versions `1.1.0`, `1.2.0` and `1.3.0`, and storage schema `1`; an in-place update must retain plugin ID and storage schema version. Supported manifest versions may change during an in-place update; the plugin release version must still increase.
 
 Changes to domains, custom-domain permission, setting declarations, or `http_credentials` require instance review before execution resumes. Changing declared credential domains or credential rules, or removing/renaming an existing secret field, also requires credentials to be re-entered. Re-entering one secret never reactivates other old secrets. Publishing a new plugin release does not update the WIT package or the host's database schema. Runtime, permissions, persistence, and validation remain host responsibilities.
 
@@ -424,6 +424,25 @@ archive time of a task completed by archiving; open tasks and tasks with an
 unknown time return none. Both count toward the query budget. Task updates keep
 the stored completion time.
 
+`list-tasks-filtered` (API 1.3.0) runs the same query as `list-tasks` and also
+keeps only tasks matching its `task-filter`: completion state (`open`, `done`,
+`archived`), priorities (none matches tasks without one), any of up to 100
+labels, waiting state, and recurrence; an empty list or none keeps every task.
+Completion applies on top of the query's status, so choose status all to reach
+archived tasks. Its optional `sort` replaces the query's sort with most
+important priority first (then by due time) or newest first. It shares the
+query budget and limits of `list-tasks`.
+
+A task can wait on other tasks of the same board (API 1.3.0). It is blocked
+while any of them is open; done, archived and removed tasks no longer block it.
+`get-task-blocked-by` returns the stored list, which is not part of the `task`
+record, and task updates keep it. `set-task-blocked-by` replaces the list of an
+active task and joins the queue shared by archive, restore and
+`set-task-priority`, applying in call order and counting toward the same 200
+operations. Its entries are task IDs or create-task keys; newly added tasks
+must be active tasks of the board other than the task itself, without
+duplicates or cycles, and at most 50. A violation rejects the whole changeset.
+
 list-tasks uses the existing explorer filtering/search and OFFSET pagination.
 Choose status all to include active and archived tasks; limit is 1..100.
 Stop on a short/empty page. Search retains its candidate/result caps; use an
@@ -438,7 +457,8 @@ references are numeric IDs or temporary keys from an earlier create-column.
 Forward references are rejected. Host allocates IDs during validation. New tasks
 append; query them in a later run to obtain IDs for positioning. Task updates replace
 all fields while preserving identity: copy the queried task before editing.
-Explicit task moves require a destination with custom sorting. External upserts
+Explicit task moves may target any column; in a column with sort rules the
+position sets the manual order kept beneath the displayed sort. External upserts
 preserve user overrides, managed labels and tombstones; repeated upserts run in
 order. Their optional column reference can target a temporary column. The tasks
 convenience list is appended after the general operations and uses numeric IDs.

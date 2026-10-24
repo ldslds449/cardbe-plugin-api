@@ -1,4 +1,4 @@
-package cardbe:plugin@1.2.0;
+package cardbe:plugin@1.3.0;
 
 interface types {
   /// Input for one invocation; configuration remains plugin-owned JSON.
@@ -119,6 +119,30 @@ interface types {
   /// Added in 1.2.0. An existing task ID, or the key of a create-task in the
   /// changeset this run returns.
   variant task-reference { id(s64), temporary(string) }
+  /// Added in 1.3.0. Open tasks, tasks in the board's done column, and
+  /// archived tasks.
+  enum task-completion { open, done, archived }
+  /// Added in 1.3.0. `waiting` keeps active tasks that wait on an open task,
+  /// `not-waiting` the other tasks, and `waited-on` open tasks that an open
+  /// task waits on.
+  enum waiting-filter { waiting, not-waiting, waited-on }
+  /// Added in 1.3.0. Orders `task-sort` does not have: most important
+  /// priority first (then by due time), or newest first.
+  enum task-sort-extra { priority, created }
+  /// Added in 1.3.0. Conditions applied on top of a `task-query`. An empty
+  /// list or none keeps every task.
+  record task-filter {
+    completion: list<task-completion>,
+    /// None in the list matches tasks without a priority.
+    priorities: list<option<task-priority>>,
+    /// Tasks with any of these labels.
+    labels: list<string>,
+    waiting: option<waiting-filter>,
+    /// True keeps only recurring tasks, false only the others.
+    recurring: option<bool>,
+    /// Replaces the query's sort when set.
+    sort: option<task-sort-extra>,
+  }
 }
 interface host {
   use types.{http-request, http-response, log-level};
@@ -141,7 +165,7 @@ interface host {
 }
 interface board {
   enum host-error { invalid-argument, permission-denied, not-found, resource-limit, internal-error }
-  use types.{board-list, board-snapshot, column-list, column-reference, column-snapshot, task-snapshot, task-page, task-query, task-priority, task-reference};
+  use types.{board-list, board-snapshot, column-list, column-reference, column-snapshot, task-snapshot, task-page, task-query, task-priority, task-reference, task-filter};
   /// Queries are scoped to the instance's authorized board and one run snapshot.
   list-boards: func() -> result<board-list, host-error>;
   get-board: func() -> result<board-snapshot, host-error>;
@@ -180,6 +204,16 @@ interface board {
   /// archived query) to the end of a column, which may be a create-column key
   /// in the returned changeset. Applied like `archive-task`.
   restore-task: func(id: s64, column: column-reference) -> result<_, host-error>;
+  /// Added in 1.3.0. Like `list-tasks`, keeping only tasks that also match
+  /// `filter`.
+  list-tasks-filtered: func(request: task-query, filter: task-filter) -> result<task-page, host-error>;
+  /// Added in 1.3.0. The tasks of this board that the task waits on, as
+  /// stored; only those still open block it. `task` records do not carry it.
+  get-task-blocked-by: func(id: s64, archived: bool) -> result<list<s64>, host-error>;
+  /// Added in 1.3.0. Stages replacing the tasks an active task waits on (an
+  /// empty list clears them); entries are task IDs or create-task keys.
+  /// Applied like `archive-task`, in the same queue.
+  set-task-blocked-by: func(task: task-reference, blocked-by: list<task-reference>) -> result<_, host-error>;
 }
 /// All plugins share this contract. Host grants govern application of output.
 world plugin {
