@@ -413,7 +413,10 @@ app; query a later run to obtain the new task's ID.
 An archived source task is a tombstone: later upserts of its external key do
 not update or recreate it, and source priorities reported for it are not
 applied. After it is restored, upserts update it again with the usual
-ownership. There is no delete; archive instead.
+ownership. When the user deletes a source task, or moves it to another board,
+the next upsert of its external key recreates it as a new task, with a new ID,
+on the instance board; a moved task no longer receives updates. Plugins cannot
+delete tasks; archive instead.
 
 Completion (API 1.2.0) follows a task's position: a task is completed while it
 is in the board's done column, or once it is archived. `get-done-column`
